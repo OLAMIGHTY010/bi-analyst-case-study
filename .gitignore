@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.duckdb
+*.duckdb.wal
+breach_dashboard.png
+simulated_email.html
+.DS_Store

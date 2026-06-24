@@ -1,0 +1,10 @@
+{
+  "is_simulation": false,
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 587,
+  "use_tls": true,
+  "username": "Nanicomlekan111@gmail.com",
+  "password": "pkas ponk kkuz tpkc",
+  "sender": "Nanicomlekan111@gmail.com",
+  "recipient": "olalekan.olatunbosun@sterling.ng"
+}
