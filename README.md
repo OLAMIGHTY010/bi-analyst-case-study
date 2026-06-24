@@ -178,6 +178,9 @@ If you are asked to walk through this project in an interview, here are common q
 **Q: Why does the `run_all.sh` script check `if [ $? -ne 0 ]` after every Python script?**
 > A: `$?` is a special bash variable that holds the exit status code of the previously executed command. If a Python script crashes (returns an exit code not equal to 0), the bash script catches it and immediately runs `exit 1` to abort the pipeline. This is a critical safety check—it prevents the system from sending out an empty or corrupted email report if the data loading step (`db_loader.py`) completely failed.
 
+**Q: If I wanted to run this pipeline on a Windows machine, what would need to change?**
+> A: The Python code itself (`db_loader.py`, `analyzer.py`, `send_report.py`, `app.py`) is completely cross-platform and would not need to change at all! The only difference is the execution environment. Instead of the Linux `run_all.sh` bash script, Windows users would run the newly included `run_all.bat` batch script. Additionally, creating the virtual environment on Windows uses `python -m venv .venv` and activating it requires running `.venv\Scripts\activate` rather than the Linux `source .venv/bin/activate`.
+
 ---
 
 ## 🔍 Code-Level Deep Dive (Specific Lines)
