@@ -84,7 +84,14 @@ The project is divided into distinct Python scripts handling different stages of
 
 ### Prerequisites
 - Python 3.x
-- Virtual environment (`.venv`) configured with dependencies: `streamlit`, `duckdb`, `pandas`, `matplotlib`, `seaborn`, `openpyxl`, `requests`.
+- Virtual environment (`.venv`) configured with dependencies listed in `requirements.txt`.
+
+#### Tech Stack / What do the requirements do?
+- **`pandas`**: The backbone of our data cleaning. We use it to read the raw Excel file, strip out hidden whitespaces, and fill blank cells before loading the data into the database.
+- **`openpyxl`**: A mandatory background engine required by `pandas` specifically to parse and extract data from `.xlsx` Excel files.
+- **`duckdb`**: Our ultra-fast, analytical (OLAP) database engine. It acts as the central persistence layer, allowing us to run complex SQL aggregations on thousands of rows instantly without needing to spin up a heavy database server like PostgreSQL.
+- **`matplotlib` & `seaborn`**: The plotting libraries used in `analyzer.py`. `matplotlib` provides the structural canvas (using `GridSpec` for the layout), while `seaborn` applies the beautiful styling and colors to the bar charts and line graphs.
+- **`streamlit`**: The web framework used in `app.py`. It magically turns our raw Python scripts and DuckDB queries into a fully interactive, responsive web dashboard without needing to write complex React or Vue frontend code.
 
 ### Execution Steps
 1. **Configure Email (Optional):** Edit `email_config.json` to provide your SMTP credentials. Set `"is_simulation": false` if you want to send a real email.
