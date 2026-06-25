@@ -4,25 +4,30 @@
 ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white)
 ![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&logo=duckdb&logoColor=black)
 
-This repository contains a complete Business Intelligence and observability data pipeline designed to ingest, process, visualize, and report on Service Level Agreement (SLA) breaches across a microservices ecosystem.
+This repository contains a production-grade Business Intelligence and observability data pipeline designed to ingest, process, validate, analyze, and report on Service Level Agreement (SLA) breaches across an enterprise microservices ecosystem.
 
-##  Architecture Flow
+---
+
+## 🏗️ Architecture Flow
 
 ```mermaid
 graph TD
-    A[Excel Data Source] -->|Pandas| C(db_loader.py)
-    B[Live API Endpoint] -.->|Requests| C
-    C -->|Writes| D[(DuckDB: breaches.duckdb)]
+    A[Excel Data Source] -->|Pandas Ingestion| C(db_loader.py)
+    B[Live API Endpoint] -.->|Requests Fetch| C
+    C -->|Schema Validate & Deduplicate| C
+    C -->|Write Pre-standardized Rows| D[(DuckDB: breaches.duckdb)]
     
-    D -->|Reads| E(analyzer.py)
+    D -->|Reads Clean Table| E(analyzer.py)
+    E -->|Calculates Pareto & trends| E
     E -->|Generates| F[Matplotlib Dashboard]
     
-    D -->|Reads| G(send_report.py)
-    F -->|Attaches Image| G
-    G -->|SMTP| H[Executive Email Report]
+    D -->|Reads Clean Table| G(send_report.py)
+    F -->|Attaches Image Inline| G
+    G -->|Dynamic Recommendations| G
+    G -->|Secure SMTP Context| H[Executive Email Report]
     
-    D -->|Reads| I(app.py)
-    I -->|Renders| J[Streamlit Interactive Web UI]
+    D -->|Reads Read-Only| I(app.py)
+    I -->|Renders Dynamic UI| J[Streamlit Interactive Web UI]
     
     style A fill:#1d6f42,stroke:#fff,stroke-width:2px,color:#fff
     style B fill:#f39c12,stroke:#fff,stroke-width:2px,color:#fff
@@ -30,191 +35,437 @@ graph TD
     style J fill:#ff4b4b,stroke:#fff,stroke-width:2px,color:#fff
 ```
 
-##  Overview
+---
 
-The system takes raw Excel data (and optionally live API metrics) containing weekly breach counts for various microservices, cleans and standardizes the data, and loads it into a fast analytical database (DuckDB). From there, it generates both static visual dashboards and a fully interactive web application, alongside an automated executive email reporting system.
+## 📂 Data Model & Source Datasets
 
-##  Project Structure & File Descriptions
+This pipeline ingests data from **one Excel file** (`Service Breach Data.xlsx`) containing **five sheets**, which are loaded into **two distinct DuckDB tables** serving different analytical purposes.
 
-The project is divided into distinct Python scripts handling different stages of the data pipeline:
+### Source Sheets → Database Tables
 
-### 1. `db_loader.py` (Data Ingestion & Cleaning)
-- **What it does:** Extracts data from the source Excel file, fetches external API metrics, and loads everything into DuckDB.
-- **How it works:** 
-  - Reads individual weekly sheets and the Tier 1 & 2 channel sheet using `pandas`.
-  - Cleans whitespace from service names, standardizes casing (e.g., ensuring "eacbs" becomes "EACBS"), and handles missing breach types.
-  - Features an **API Integration module** (`fetch_api_data`) that uses the `requests` library to fetch live data from external observability dashboards (like Grafana). This is currently mocked but is fully production-ready.
-  - Creates two tables in the local `breaches.duckdb` file: `weekly_breaches_raw` and `tier_1_2_breaches`.
-
-### 2. `analyzer.py` (SQL Analytics & Visualization)
-- **What it does:** Performs SQL aggregations and generates a static visual dashboard.
-- **How it works:**
-  - Connects to the DuckDB database.
-  - Runs SQL queries to compute weekly trends, calculate the split between "Error rate" and "Latency" breaches, and identify the top 10 offending microservices globally and in Tier 1 & 2.
-  - Uses `matplotlib` and `seaborn` to render a 4-part dashboard grid (KPI cards, weekly trends, breach type breakdown, and top offenders).
-  - Saves the resulting dashboard as `breach_dashboard.png`.
-
-### 3. `send_report.py` (Automated Reporting)
-- **What it does:** Generates an HTML executive summary and sends it via email.
-- **How it works:**
-  - Queries the database for high-level KPIs and top offenders.
-  - Constructs a responsive HTML email body injecting the data into a template.
-  - Reads `email_config.json` for SMTP credentials.
-  - Attaches the `breach_dashboard.png` image inline.
-  - Sends the email using Python's `smtplib` (or saves a local `simulated_email.html` if `is_simulation` is set to `true`).
-
-### 4. `app.py` (Interactive Web Dashboard)
-- **What it does:** Provides an interactive UI for exploring the data and reading analytical narratives.
-- **How it works:**
-  - Built with Streamlit, it connects to DuckDB in read-only mode to prevent file locks.
-  - **Tab 1:** Provides interactive bar charts for weekly distributions and top offenders, with filters for weeks and breach types. Includes a toggle to view the static dashboard image.
-  - **Tab 2:** A searchable raw data table.
-  - **Tab 3:** Static executive insights and strategic recommendations based on the data.
-  - **Tab 4 (The Breach Chronicles):** Computes data on the fly to generate a dynamic, narrative-driven report styled with custom CSS for maximum readability.
-
-### 5. `run_all.sh` (Pipeline Automation)
-- **What it does:** A wrapper shell script to run the entire data pipeline sequentially.
-- **How it works:** 
-  - Executes `db_loader.py`, then `analyzer.py`, then `send_report.py`.
-  - Checks for exit codes at each step and halts the pipeline if a failure occurs.
+| Excel Sheet | Standardised As | Loaded Into |
+| :--- | :--- | :--- |
+| `Week 1` | `Week 1` | `weekly_breaches_raw` |
+| `W` | `Week 3` | `weekly_breaches_raw` |
+| `Week 2` | `Week 2` | `weekly_breaches_raw` |
+| `24th - 30th` | `Week 4` | `weekly_breaches_raw` |
+| `1st - 2nd` | (as-is, all 4 weeks) | `tier_1_2_breaches` |
 
 ---
 
-##  Implementation Procedure
+### Table 1: `weekly_breaches_raw`
 
-### Prerequisites
-- Python 3.x
-- Virtual environment (`.venv`) configured with dependencies listed in `requirements.txt`.
+| Property | Value |
+| :--- | :--- |
+| **Rows** | 1,225 |
+| **Total Breaches** | 36,228 |
+| **Unique Services** | 253 microservices |
+| **Weeks Covered** | Week 1, Week 2, Week 3, Week 4 |
+| **Naming Convention** | Granular API/component level names |
 
-#### Tech Stack / What do the requirements do?
-- **`pandas`**: The backbone of our data cleaning. We use it to read the raw Excel file, strip out hidden whitespaces, and fill blank cells before loading the data into the database.
-- **`openpyxl`**: A mandatory background engine required by `pandas` specifically to parse and extract data from `.xlsx` Excel files.
-- **`duckdb`**: Our ultra-fast, analytical (OLAP) database engine. It acts as the central persistence layer, allowing us to run complex SQL aggregations on thousands of rows instantly without needing to spin up a heavy database server like PostgreSQL.
-- **`matplotlib` & `seaborn`**: The plotting libraries used in `analyzer.py`. `matplotlib` provides the structural canvas (using `GridSpec` for the layout), while `seaborn` applies the beautiful styling and colors to the bar charts and line graphs.
-- **`streamlit`**: The web framework used in `app.py`. It magically turns our raw Python scripts and DuckDB queries into a fully interactive, responsive web dashboard without needing to write complex React or Vue frontend code.
+**What it represents:** The **full system-wide ecosystem** — every API, backend service, and infrastructure component across the bank's microservices landscape. Each row represents a specific microservice's breach count under a specific breach type for a given week.
 
-### Execution Steps
-1. **Configure Email (Optional):** Edit `email_config.json` to provide your SMTP credentials. Set `"is_simulation": false` if you want to send a real email.
-2. **Run the Pipeline:** Execute the shell script to load data, generate the static dashboard, and build the email report.
-   ```bash
-   source .venv/bin/activate
-   bash run_all.sh
-   ```
-3. **Launch the Web Dashboard:** Start the Streamlit application to interact with the data.
-   ```bash
-   streamlit run app.py
-   ```
-   Access the dashboard in your web browser at `http://localhost:8501`.
+**Why it exists:** This is the **primary analytical dataset**. It provides the complete picture of SLA violations across the entire platform, enabling system-wide KPIs, trend analysis, Pareto prioritisation, and identification of the worst offending services across all engineering teams.
 
----
+**Columns:**
+```
+week              VARCHAR   -- Standardised week label (Week 1 – Week 4)
+microservice      VARCHAR   -- Technical API/service name
+breach_count      INTEGER   -- Number of SLA breaches recorded
+breach_type       VARCHAR   -- Raw breach type from source (e.g. 'Latency', 'Health Check')
+core_breach_type  VARCHAR   -- Pre-computed category: 'Error rate', 'Latency', or 'Unknown'
+```
 
-## 📊 Data Model
-
-The DuckDB database (`breaches.duckdb`) contains two primary tables:
-- **`weekly_breaches_raw`**: All system microservices. Columns: `week`, `microservice`, `breach_count`, `breach_type`.
-- **`tier_1_2_breaches`**: Filtered subset of critical channels. Columns: `week`, `microservice`, `breach_count`, `breach_type`.
-
-Breach types are further mapped into core categories within `app.py` and `analyzer.py`:
-- **Error rate:** Error rate, Availability, Health Check, Failed Count, Failure Rate & Failed Count.
-- **Latency:** Latency, Consumer Lag, Pending Count, Pending Rate & Pending Count, Frozen Jobs, Unsynced Count, High Disk Usage on D:.
-- **Unknown:** Any other unmapped types.
+**Used in:** KPI cards (Total SLA Breaches, Error Ratio, Latency Ratio), weekly trend chart (ecosystem line), stacked breach classification chart, Pareto analysis, Breach Chronicles narrative, and the ecosystem-wide email executive summary.
 
 ---
 
-##  Interview Preparation (Q&A)
+### Table 2: `tier_1_2_breaches`
 
-If you are asked to walk through this project in an interview, here are common questions and how to answer them:
+| Property | Value |
+| :--- | :--- |
+| **Rows** | 64 |
+| **Total Breaches** | 4,237 |
+| **Unique Services** | 16 microservices |
+| **Weeks Covered** | Week 1, Week 2, Week 3, Week 4 |
+| **Naming Convention** | Product/channel level names |
 
-**Q: Why did i choose DuckDB over pandas or SQLite for this project?**
-> A: While `pandas` is great for simple scripts, loading the data into DuckDB provides a scalable analytical backend. DuckDB is highly optimized for analytical (OLAP) queries, meaning grouping and aggregating thousands of rows is exceptionally fast. It also acts as a clean persistence layer so that the heavy lifting (loading and parsing Excel files) only happens once, rather than every time the Streamlit dashboard reloads.
+**What it represents:** A **curated, management-level view** of the 16 highest-priority customer-facing channels — the services that directly impact end users during banking interactions. Examples include `USSD`, `SMS`, `OTP`, `Banca`, `OneCompanion`, `Xplorer`, `OneBank`, and `Branch-statement`.
 
-**Q: How did you handle the messy/inconsistent data from the raw Excel file?**
-> A: The `db_loader.py` script acts as an ETL (Extract, Transform, Load) pipeline. It handles several issues:
-> - **Whitespace:** It strips trailing spaces from microservice names.
-> - **Inconsistent Casing:** It standardizes names (e.g., forcing "eacbs" to "EACBS").
-> - **Missing Values:** Blank "Breach Type" cells are filled with the string `"Unknown"` to prevent null-reference errors downstream.
+**Why it exists:** This is a **separately maintained executive dataset**. It uses product-level service names (not technical API names) and its breach counts reflect a different aggregation level from the weekly sheets. It allows leadership to monitor the stability of the services customers actually touch, independently of the broader engineering ecosystem view.
 
-**Q: Why do you categorize some breach types as "Unknown"?**
-> A: To make the visualizations (like the bar charts and KPI metrics) readable, we group dozens of highly specific breach descriptions into two main buckets: "Error rate" (things breaking) and "Latency" (things running slow). The "Unknown" bucket is a safety net. If a cell was blank in the original spreadsheet, or if a completely new, unrecognized breach type appears in the data, it gets bucketed as "Unknown" so the data is not lost or silently dropped.
+> [!IMPORTANT]
+> The `1st - 2nd` sheet is **NOT a summary or duplicate** of the weekly sheets. This was verified by comparing service names and breach counts directly. Key findings:
+> - **14 of the 16 Tier 1 & 2 service names do not appear in the weekly sheets** — they use product-level names (e.g., `Xplorer`) vs technical API names (e.g., `xplorer-case-api`).
+> - **Breach counts are independently maintained** — e.g., `OneBank.APIGateWay` shows 47 breaches in the T12 sheet for Week 1, vs 496 breaches in the weekly sheet. Different aggregation, different purpose.
+> - **There is zero double-counting risk** — the two tables are analytically complementary, not overlapping.
 
-**Q: Can you explain the SQL syntax you used to categorize these breach types, specifically the use of keywords like `CASE`, `END`, and `AS`?**
-> A: Absolutely! In `analyzer.py`, I used a conditional SQL statement that looks like this:
-> ```sql
-> SELECT 
->     CASE 
->         WHEN breach_type IN ('Health Check', 'Failed Count') THEN 'Error rate'
->         WHEN breach_type IN ('Consumer Lag', 'Pending Count') THEN 'Latency'
->         ELSE 'Unknown'
->     END AS core_breach_type
-> ```
-> - **`CASE ... WHEN ... THEN`**: This works exactly like an `if/elif` statement in Python. It checks the value of the raw `breach_type` column and assigns it to a bucket.
-> - **`ELSE`**: This handles the fallback (anything not matched above gets labelled 'Unknown').
-> - **`END`**: This keyword simply tells the database engine that the conditional `CASE` logic is finished.
-> - **`AS core_breach_type`**: This is an **alias**. It tells the database to take the result of that entire `CASE...END` logic and output it as a brand new, neatly named column called `core_breach_type` so it's easy to read in Python and plot on a chart.
+**Columns:**
+```
+week              VARCHAR   -- Week label as provided in source (Week 1 – Week 4)
+microservice      VARCHAR   -- Product/channel name (e.g. 'USSD', 'Banca', 'OTP')
+breach_count      INTEGER   -- Number of SLA breaches for that channel that week
+breach_type       VARCHAR   -- Raw breach type from source
+core_breach_type  VARCHAR   -- Pre-computed category: 'Error rate', 'Latency', or 'Unknown'
+```
 
-**Q: Can this system handle live data, or is it strictly tied to Excel?**
-> A: I built the system to be future-proof. While the primary data source is currently Excel, I've already implemented a `fetch_api_data()` module inside `db_loader.py`. It uses the `requests` library to fetch JSON payloads from external observability APIs (like Grafana). This data gets parsed and appended directly into the DuckDB database alongside the Excel data, meaning the dashboard can easily display hybrid (historical + live) data.
-
-**Q: How do you prevent file locking issues since both `analyzer.py` and `app.py` use the same database?**
-> A: DuckDB allows only one process to read/write to a database file at a time by default. To solve this, both the dashboard (`app.py`) and the analyzer script connect to the database using `read_only=True` (`duckdb.connect(db_file, read_only=True)`). This allows multiple scripts to query the database concurrently without throwing lock errors. The only script that requires write access is `db_loader.py`, which runs first when no other scripts are active.
-
-**Q: Why did you separate the Matplotlib dashboard (`analyzer.py`) from the Streamlit app (`app.py`)?**
-> A: Separation of concerns. The `analyzer.py` script serves as a batch job that can run on a schedule (e.g., via a cron job) to generate static assets (`breach_dashboard.png`) and feed the automated email system without needing a web server running. `app.py` serves exclusively as the interactive, user-facing layer. The Streamlit app can still embed the static dashboard generated by the analyzer.
-
-**Q: How does `send_report.py` manage to embed the dashboard image directly into the email body, rather than as an annoying attachment?**
-> A: To make the email look like a seamless professional report, the script uses the `MIMEMultipart('related')` email standard. It attaches the image (`breach_dashboard.png`) using the `MIMEImage` class and assigns it a unique `Content-ID` (in this case, `<breach_dashboard>`). In the raw HTML string, the image is rendered using `<img src="cid:breach_dashboard" />`. This guarantees the image renders inline natively across all major email clients (Outlook, Gmail, Apple Mail) without requiring the user to download an attachment.
-
-**Q: Why does `send_report.py` query the database again to get its metrics? Couldn't `analyzer.py` just pass the numbers to it?**
-> A: It queries DuckDB directly to maintain strict **separation of concerns**. If `analyzer.py` passed variables to the reporting script, they would be tightly coupled, meaning one could not run without the other. By having `send_report.py` independently query the database, you can run the email reporter completely on its own (for instance, triggering a daily summary email via a cron job) without having to re-run the heavy graphical analyzer scripts.
-
-**Q: How did you test the email functionality without spamming inboxes or needing a live SMTP server during development?**
-> A: I implemented an `is_simulation` flag in the `email_config.json` file. When `true`, the `send_report.py` script bypasses the entire `smtplib` connection phase. Instead, it generates the full HTML payload and writes it directly to the local disk as `simulated_email.html`. This allows developers to instantly preview the exact email formatting in a web browser without sending a single network request.
-
-**Q: In `db_loader.py`, why did you use `pandas` to read the Excel file instead of having DuckDB read it directly?**
-> A: While DuckDB is incredibly fast for SQL queries, its native Excel parser is less robust than `pandas` for handling messy, multi-sheet corporate spreadsheets. `pandas` allows us to easily specify `sheet_name`, apply string manipulation like `.str.strip()` to remove hidden spaces, and use `.fillna()` to handle blank cells before piping the clean `DataFrame` directly into DuckDB.
-
-**Q: In `app.py`, you inject custom CSS using `unsafe_allow_html=True`. Isn't that a security risk?**
-> A: `unsafe_allow_html=True` can be an XSS (Cross-Site Scripting) vulnerability if you are rendering unescaped user input (like a public comment section). However, in this dashboard, I am strictly using it to inject hardcoded CSS styles (`<style>`) and static layout elements (like `<div class="story-hero">`). Because no raw user text from the public is being passed into these HTML blocks, there is no XSS risk.
-
-**Q: How does `app.py` handle filtering the data when the user selects different weeks or breach types?**
-> A: After loading the full dataset from DuckDB into a pandas DataFrame (`df_all`), Streamlit provides multi-select widgets in the sidebar. I use pandas boolean masking: `df_filtered = df_all[(df_all['week'].isin(selected_weeks)) & (df_all['core_breach_type'].isin(selected_types))]`. All the charts, tables, and KPIs dynamically recalculate based on `df_filtered` instantly.
-
-**Q: In `analyzer.py`, why did you use `matplotlib.gridspec` instead of standard subplots?**
-> A: `GridSpec` allows for complex, asymmetric layouts. Instead of a rigid 2x2 grid, I needed the KPI cards to span the top row in 4 small boxes, while the weekly trends line chart needed to take up a wider 2-column section below it. `GridSpec` gives precise control over the width and height ratios of each chart within a single cohesive dashboard image.
-
-**Q: Why does the `run_all.sh` script check `if [ $? -ne 0 ]` after every Python script?**
-> A: `$?` is a special bash variable that holds the exit status code of the previously executed command. If a Python script crashes (returns an exit code not equal to 0), the bash script catches it and immediately runs `exit 1` to abort the pipeline. This is a critical safety check—it prevents the system from sending out an empty or corrupted email report if the data loading step (`db_loader.py`) completely failed.
-
-**Q: If I wanted to run this pipeline on a Windows machine, what would need to change?**
-> A: The Python code itself (`db_loader.py`, `analyzer.py`, `send_report.py`, `app.py`) is completely cross-platform and would not need to change at all! The only difference is the execution environment. Instead of the Linux `run_all.sh` bash script, Windows users would run the newly included `run_all.bat` batch script. Additionally, creating the virtual environment on Windows uses `python -m venv .venv` and activating it requires running `.venv\Scripts\activate` rather than the Linux `source .venv/bin/activate`.
+**Used in:** Tier 1 & 2 KPI card (% contribution to total), weekly trend chart (T12 overlay line), Top 10 Tier 1 & 2 offenders chart, customer-facing channel warnings in the Executive Insights tab, and the Tier 1 & 2 section of the email report.
 
 ---
 
-## 🔍 Code-Level Deep Dive (Specific Lines)
+### ⚠️ Known Data Quality Issue (Auto-Detected)
 
-If the interviewer points to a specific line of code in the scripts and asks you to explain the syntax, use these answers:
+The ETL pipeline (`db_loader.py`) automatically runs a **pairwise cross-week comparison** on the `tier_1_2_breaches` data. It detected that the records for **Week 2 and Week 3 in the `1st - 2nd` source sheet are 100% identical** across all 16 services (both weeks sum to exactly 1,136 breaches with matching per-service breakdowns). This is a **copy-paste duplication error in the source Excel file**, not a pipeline issue.
 
-**Code Line (`db_loader.py`):** 
-`df['Breach Type'] = df['Breach Type'].fillna('Unknown').astype(str).str.strip()`
-> **Interviewer:** "Can you explain this method chaining?"
-> **Answer:** "This line cleans the target column in three steps. First, `.fillna('Unknown')` replaces any blank/null cells with the string 'Unknown'. Second, `.astype(str)` ensures that pandas treats the entire column as text (preventing mixed-type errors). Finally, `.str.strip()` removes any accidental leading or trailing whitespace characters that the user might have typed into the Excel sheet, ensuring clean groupings later."
+The pipeline logs this as a `CRITICAL` data integrity alert and continues loading. The data quality warning is surfaced in:
+- The terminal log during `db_loader.py` execution
+- The `app.py` Executive Insights tab (dynamic warning box)
+- The `send_report.py` email HTML body (Key Quality Alerts section)
 
-**Code Line (`app.py`):** 
-`conn = duckdb.connect(db_file, read_only=True)`
-> **Interviewer:** "Why did you explicitly pass `read_only=True` here?"
-> **Answer:** "DuckDB is designed as an embedded database, meaning it locks the database file by default so only one process can write to it at a time. If I didn't pass `read_only=True`, the Streamlit app would crash if the `analyzer.py` script happened to be querying the database at the exact same moment. This flag allows infinite concurrent reads."
+> [!WARNING]
+> Any trend analysis for Tier 1 & 2 channels between Week 2 and Week 3 should be interpreted with caution, as the Week 3 data may be a copy of Week 2. Escalate to the data owner for correction at source.
 
-**Code Line (`app.py` & `analyzer.py`):** 
-`df_weekly = df_filtered.groupby(['week', 'core_breach_type'])['breach_count'].sum().reset_index()`
-> **Interviewer:** "Walk me through this pandas aggregation. Why the `.reset_index()` at the end?"
-> **Answer:** "This groups the data by the Week and the Type, and sums up the total breaches for those groups. However, pandas `.groupby()` automatically turns the grouped columns (`week` and `core_breach_type`) into the DataFrame's index. Calling `.reset_index()` pushes them back into standard columns so that Streamlit and Seaborn can easily plot them on the X and Y axes."
+---
 
-**Code Line (`analyzer.py`):** 
-`df_pivot_raw = df_types_raw.pivot(index='week', columns='core_breach_type', values='total_breaches').fillna(0)`
-> **Interviewer:** "Why are you pivoting the data here instead of just plotting the grouped data directly?"
-> **Answer:** "In order to create a **Stacked Bar Chart**, matplotlib/pandas requires the data to be in a wide format where the index is the X-axis (`week`) and the columns represent the stacked segments (`core_breach_type`). The `.fillna(0)` is critical here, because if a specific breach type didn't happen in Week 2, the pivot would create a `NaN` value which would crash the plotting function."
+### How Both Tables Work Together
 
-**Code Line (`send_report.py`):** 
-`msg_image.add_header('Content-ID', '<breach_dashboard>')`
-> **Interviewer:** "What does the `Content-ID` header actually do in the email structure?"
-> **Answer:** "When constructing a MIME multipart email, attaching an image usually just puts it at the bottom as a downloadable file. By assigning a `Content-ID` (CID) to the image part, I create an internal variable that the HTML body can reference. In the HTML, I use `<img src="cid:breach_dashboard" />`, and the email client knows to fetch the attachment and render it exactly at that spot in the text."
+```
+Excel File
+  ├── Week 1 / Week 2 / W / 24th - 30th ──▶ weekly_breaches_raw  (253 services, 36,228 breaches)
+  │                                               │
+  │                                               ▼
+  │                                        System-wide KPIs
+  │                                        Pareto Analysis
+  │                                        Ecosystem Trend Line
+  │
+  └── 1st - 2nd ─────────────────────────▶ tier_1_2_breaches    (16 services, 4,237 breaches)
+                                                  │
+                                                  ▼
+                                           Tier 1 & 2 KPI Card
+                                           Customer Channel Trend Line
+                                           Executive Channel Alerts
+
+Both tables are read together in analyzer.py, send_report.py, and app.py
+to produce side-by-side ecosystem vs. customer-channel comparisons.
+```
+
+---
+
+## 🗂️ Project Structure
+
+| File | Purpose |
+| :--- | :--- |
+| `config.py` | Central configuration — file paths, SLA thresholds, column schemas, and standardisation mappings |
+| `db_loader.py` | ETL pipeline — reads Excel, validates, cleans, deduplicates, and loads data into DuckDB |
+| `analyzer.py` | SQL analytics — runs aggregations, computes Pareto analysis, and generates the static dashboard image |
+| `send_report.py` | Reporting — builds the HTML executive summary and dispatches it via SMTP |
+| `app.py` | Interactive Streamlit web portal — filters, charts, Pareto view, and narrative storytelling |
+| `email_config.json` | Configurable email settings (SMTP host, port, sender, recipient, simulation flag) |
+| `breaches.duckdb` | Local analytical database (auto-generated by `db_loader.py`) |
+| `breach_dashboard.png` | Static dashboard image (auto-generated by `analyzer.py`) |
+| `run_all.bat` | Windows automation script — runs the full pipeline end-to-end |
+| `run_all.sh` | Linux/macOS automation script — runs the full pipeline end-to-end |
+
+---
+
+## ⚙️ Prerequisites
+
+- Python 3.8+
+- Virtual environment configured with all dependencies
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# Linux / macOS
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+**Dependencies (`requirements.txt`):**
+
+| Package | Purpose |
+| :--- | :--- |
+| `pandas` | Excel ingestion and data cleaning |
+| `openpyxl` | Excel `.xlsx` file parsing engine |
+| `duckdb` | Local analytical database engine |
+| `matplotlib` | Static dashboard chart rendering |
+| `seaborn` | Chart theming and styling |
+| `streamlit` | Interactive web dashboard |
+
+---
+
+## 🔍 Detailed Project Walkthrough
+
+This project operates as a complete, production-grade data engineering and Business Intelligence pipeline. The section below traces the end-to-end journey of the observability data from raw ingestion to reporting.
+
+### Step 1: Data Ingestion & ETL Layer (`db_loader.py`)
+- **Extraction**: The script parses the raw corporate Excel workbook (`Service Breach Data.xlsx`). It dynamically scans sheet names, auto-mapping sheets like `Week 1`, `Week 2`, `W` (Week 3), and `24th - 30th` (Week 4) to standard weekly categories. It also handles external API fetching if enabled.
+- **Validation & Cleaning**:
+  - Enforces schema constraints, renaming columns case-insensitively to match requirements.
+  - Profiles missing values, filling blank breach counts with `0` and missing breach types with `"Unknown"`.
+  - Coerces columns to correct datatypes (e.g. converting non-numeric count inputs to integers).
+  - Strips leading/trailing whitespaces and maps technical service names (like `eacbs` -> `EACBS`) to clean, standard casing.
+- **Duplication & Integrity Checks**:
+  - Performs row-level de-duplication within each sheet.
+  - Executes a pairwise cross-week record comparison on the Tier 1 & 2 dataset. If two weeks share identical records across all 16 customer channels, it triggers a `CRITICAL` data duplication alarm, alerting teams to potential clerical copy-paste errors in the source document.
+- **Persistence**: Writes the cleaned rows directly into DuckDB tables (`weekly_breaches_raw` and `tier_1_2_breaches`). During this write phase, it pre-computes and stores `core_breach_type` (Error rate vs Latency) in the database columns for downstream query optimization.
+
+### Step 2: SQL Analytics & Visualization Layer (`analyzer.py`)
+- **Query Aggregations**: Reads the persistent DuckDB database in read-only mode to calculate high-level operational statistics: total system breaches, breach-type ratios, and dynamic Chronological Week-over-Week (WoW) trends.
+- **Pareto Priority Calculations**: Identifies the worst offending microservices using the Pareto 80/20 rule to separate the "Vital Few" (those driving 80% of total breaches) from the "Useful Many".
+- **Visual Dashboard Output**: Renders two distinct, tailored dashboard images:
+  1. `breach_dashboard_system.png` — Visualizes ecosystem KPIs, raw weekly trends, system-wide classification, and system-level Pareto distributions.
+  2. `breach_dashboard_tier.png` — Tailored for management, showing Tier 1 & 2 specific KPIs, customer channel weekly trends, and critical channel-level Pareto metrics.
+
+### Step 3: Executive Reporting Layer (`send_report.py`)
+- **Dynamic Summaries**: Queries DuckDB to locate top offenders and automatically writes customized SRE action recommendations.
+- **SLA Alert Statuses**: Evaluates baseline metrics against thresholds defined in `config.py` (e.g. total breaches limits, error ratios, latency tolerances) to assign statuses (`OPTIMAL`, `HIGH RISK`, `CRITICAL`).
+- **SMTP Delivery**: Builds a responsive HTML email body, embeds the system dashboard visualization inline using unique `Content-ID` (CID) headers, and dispatches the live report via secure TLS connection managers. If `is_simulation` is active, it bypasses network transmission and writes the output locally to `simulated_email.html` for developer testing.
+
+### Step 4: Streamlit Interactive Portal (`app.py`)
+- **Concurrence & Safety**: Connects to the DuckDB file in read-only mode, enabling infinite concurrent reader threads without database locks.
+- **Sub-millisecond Caching**: Caches raw SQL query outputs using `@st.cache_data`. This ensures that Streamlit filters, widgets, and multi-select filters respond instantly (under 10ms) without hitting the database repeatedly.
+- **Dashboard Tabs**:
+  - **Tab 1: Interactive Analytics** — Features filterable weekly bar charts, interactive top offender rankings, an on-the-fly Pareto analysis prioritizer, and a static Matplotlib dashboard expander that changes dynamically based on the target dataset.
+  - **Tab 2: Data Explorer** — A searchable, sortable raw data table.
+  - **Tab 3: Executive Insights** — Renders dynamic strategic advice and automatically displays data quality alarms for duplicate source sheets.
+  - **Tab 4: The Breach Chronicles** — Combines narrative copywriting with live query variables and custom styles to tell a cohesive, data-driven story of system performance.
+
+---
+
+## 🚀 How to Run
+
+### Option 1 — Automated Pipeline (Recommended)
+
+Run the full pipeline in one command. This will load the data, generate the dashboard image, and send the email report.
+
+**Windows:**
+```bat
+run_all.bat
+```
+
+**Linux / macOS:**
+```bash
+bash run_all.sh
+```
+
+The script executes three steps in sequence and stops immediately if any step fails:
+
+| Step | Script | Output |
+| :--- | :--- | :--- |
+| 1 | `db_loader.py` | Populates `breaches.duckdb` |
+| 2 | `analyzer.py` | Saves `breach_dashboard.png` |
+| 3 | `send_report.py` | Sends email or saves `simulated_email.html` |
+
+### Option 2 — Run Scripts Individually
+
+```bash
+# Step 1: Load and clean data into DuckDB
+python db_loader.py
+
+# Step 2: Generate SQL analytics and static dashboard
+python analyzer.py
+
+# Step 3: Build and dispatch the executive email report
+python send_report.py
+```
+
+### Option 3 — Launch the Interactive Web Dashboard
+
+```bash
+streamlit run app.py
+```
+
+Access the portal at `http://localhost:8501` in your browser.
+
+---
+
+## 📧 Email Configuration
+
+Edit `email_config.json` before running the pipeline:
+
+```json
+{
+  "is_simulation": true,
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 587,
+  "use_tls": true,
+  "username": "your-email@gmail.com",
+  "password": "your-app-password",
+  "sender": "your-email@gmail.com",
+  "recipient": "recipient@example.com"
+}
+```
+
+- Set `"is_simulation": true` to save the report locally as `simulated_email.html` without sending.
+- Set `"is_simulation": false` to dispatch a live email via SMTP.
+
+---
+
+## 🎙️ 15-Minute Case Study Review Presentation Script (Word-for-Word)
+
+This section provides a complete, professional, word-for-word presentation script designed to guide you through a **15-minute case study review** with a Technology Leader (CTO, VP of Engineering, or Head of SRE). 
+
+---
+
+### ⏱️ Presentation Timeline & Pacing
+* **0:00 - 1:30 (1.5 mins):** Welcome, Context, & Architectural Overview
+* **1:30 - 4:00 (2.5 mins):** Data Ingestion, ETL Layer, & Data Quality Discoveries
+* **4:00 - 7:00 (3.0 mins):** SQL Analytics & The Pareto Principle (Vital Few vs. Useful Many)
+* **7:00 - 10:00 (3.0 mins):** Actionable SRE Recommendations & Executive Reporting
+* **10:00 - 12:30 (2.5 mins):** Interactive Streamlit Web Portal Demonstration
+* **12:30 - 15:00 (2.5 mins):** Summary of Engineering Best Practices & Q&A Transition
+
+---
+
+### 🗣️ Presentation Script
+
+#### 🎤 Section 1: Welcome & Architectural Overview (0:00 – 1:30)
+> *"Good morning/afternoon, and thank you for taking the time to review this Business Intelligence and Service Reliability Case Study. Today, I am excited to walk you through an enterprise observability data pipeline that I designed and built.*
+> 
+> *Our main business objective is to analyze 4 weeks of microservice breach logs—specifically focusing on Error Rate and Latency breaches—to identify systemic operational risks, optimize our service level agreements, and formulate an actionable roadmap for our technology leadership team.*
+> 
+> *To deliver a production-grade solution, I designed a pipeline with a clear separation of concerns, choosing a modern, lightweight data stack:*
+> 1. * **Ingestion & ETL (`db_loader.py`):** Built with Python and Pandas to clean, validate, and standardize raw logs.*
+> 2. * **Analytical Database (`breaches.duckdb`):** An embedded DuckDB database, chosen for its ultra-fast columnar SQL processing and read-only concurrency support.*
+> 3. * **Data Visualization (`analyzer.py`):** An automated SQL analytics and Matplotlib script to generate high-fidelity, production-ready static dashboards.*
+> 4. * **Executive Reporting (`send_report.py`):** An automated reporting system that translates raw data into structured SRE recommendations and dispatches an inline-embedded HTML email.*
+> 5. * **Interactive Dashboard (`app.py`):** A Streamlit web application with sub-millisecond query caching for real-time exploratory analytics.*
+> 
+> *As you can see in the **Architecture Flow** diagram at the top of the README, this layout ensures that our analytical queries, reporting schedules, and web interfaces all pull from a single, cleaned source of truth without database locking issues."*
+
+---
+
+#### 🎤 Section 2: Ingestion, ETL, & Data Quality Discoveries (1:30 – 4:00)
+> *"Let's talk about how the data enters our system. When I assessed the raw corporate Excel workbook, `Service Breach Data.xlsx`, I identified a key structural detail. The workbook contains five sheets:*
+> * *Four weekly sheets (`Week 1`, `Week 2`, `W` which represents Week 3, and `24th - 30th` which represents Week 4) containing **system-wide granular technical API logs**.*
+> * *One sheet named `1st - 2nd` containing **management-level critical customer channel logs**.*
+> 
+> *My first critical analytical decision was to evaluate if the Tier 1 & 2 data was simply an aggregation of the weekly sheets. By writing cross-sheet analysis checks, I discovered two critical insights:*
+> 1. * **They are complementary, distinct datasets:** 14 of the 16 Tier 1 & 2 customer channel names (like `USSD` or `Banca`) do not exist in the weekly technical logs, which use technical API names (like `xplorer-case-api`). Furthermore, the breach numbers are independently aggregated. Combining them into a single table would cause double-counting and corrupt our metrics. Therefore, I modeled them as two separate tables: `weekly_breaches_raw` (1,225 records, 36,228 breaches) and `tier_1_2_breaches` (64 records, 4,237 breaches).*
+> 2. * **A major data entry anomaly was detected:** I built a pairwise cross-week record comparison check inside `db_loader.py`. The pipeline flagged a **critical data quality warning**: the records for **Week 2 and Week 3 in the Tier 1 & 2 sheet are 100% identical** across all 16 channels, both summing to exactly 1,136 breaches. This is a clear clerical copy-paste error in the source Excel file. Instead of crashing, my ETL pipeline logs this as a `CRITICAL` alert, imports the data to preserve historical records, and dynamically propagates this warning to the Streamlit UI and the executive email report so that decision-makers know that the Tier 1 & 2 trends between Week 2 and Week 3 are based on duplicated inputs.*
+> 
+> *During ETL, we also standardized casing (mapping variations like `eacbs` to `EACBS`), converted empty fields to `'Unknown'`, and utilized `pd.to_numeric` with `errors='coerce'` to intercept non-numeric entry errors, converting them safely to `0` and logging warnings for SRE review."*
+
+---
+
+#### 🎤 Section 3: SQL Analytics & The Pareto Principle (4:00 – 7:00)
+> *"Now that our database is populated, we run SQL aggregations to understand system health. Across our entire microservices ecosystem over the 4-week period, we recorded a total of **36,228 SLA breaches**.*
+> 
+> *If we look at the breach types, **61.5% are Error Rate issues** (22,282 breaches), and **38.5% are Latency issues** (13,944 breaches). Looking at our critical customer-facing channels, they account for **4,237 breaches**, representing 11.7% of the total system-wide failure rate.*
+> 
+> *Comparing these figures to our SLA thresholds, our Total System Breaches are in a **CRITICAL** state, exceeding our goal of under 10,000. Our Error Breach ratio of 61.5% is **HIGH RISK** compared to our target of under 30%. However, our Latency Breach ratio of 38.5% remains **OPTIMAL** against our target of under 70%.*
+> 
+> *To help engineering teams prioritize fixes under resource constraints, I implemented a SQL-based **Pareto 80/20 analysis**. SREs cannot investigate all 253 microservices, so we isolate the 'Vital Few' that drive 80% of the failures.*
+> 
+> *Our analytics flagged the top offenders:*
+> * * **System-wide:** The worst-performing microservice is `xplorer-case-api` with **2,868 breaches**, followed by `OneBank.APIGateWay` with **1,904 breaches**, and `customer-management-api` with **1,471 breaches**.*
+> * * **Customer Channels (Tier 1 & 2):** The leading culprit is the `Xplorer` channel with **681 breaches**, followed by `OneCompanion` with **537**, and `Banca` with **507**.*
+> 
+> *By resolving issues in just these top 3 customer channels, we would eliminate visual stability complaints for over 40% of customer interactions."*
+
+---
+
+#### 🎤 Section 4: SRE Recommendations & Executive Reporting (7:00 – 10:00)
+> *"Visualizations are valuable, but they must translate into operational actions. In `send_report.py`, I converted these analytics into three concrete engineering recommendations for our Technology Leaders:*
+> 
+> 1. * **Audit and Optimize `xplorer-case-api` (Immediate Action):** As the system's worst offender with 2,868 breaches, engineering teams must immediately audit its SQL query profiling, connection pool size allocations, and review nested exception handling.*
+> 2. * **Scale `OneBank.APIGateWay` (Medium-Term Action):** Representing 1,904 latency-heavy breaches, this gateway exhibits capacity constraints. SRE recommends horizontal pod scaling in Kubernetes and tuning API gateway cache eviction intervals to mitigate the latency blast radius.*
+> 3. * **Contain the Blast Radius for `Xplorer` (Long-Term Architectural Action):** The customer-facing `Xplorer` channel has 681 breaches. SRE recommends implementing API gateway circuit breakers and graceful degradation fallbacks. If downstream services fail, the gateway should serve cached values or a friendly timeout rather than failing completely and impacting the end user.*
+> 
+> *To automate this communication, the pipeline includes a reporting script. When executed, it queries DuckDB, generates these dynamic recommendations, compiles a polished HTML email, embeds the Matplotlib dashboard inline using Content-ID (CID) headers, and sends it to configured stakeholders. If running in local test mode, the script saves a local file called `simulated_email.html` so developers can verify the layout and formatting immediately."*
+
+---
+
+#### 🎤 Section 5: Streamlit Web Portal Demonstration (10:00 – 12:30)
+> *"Now, let me walk you through the interactive web dashboard. I built this using Streamlit to serve as an operational portal. By running `streamlit run app.py`, we open a dashboard organized into four core tabs:*
+> 
+> * * **Tab 1: Interactive Analytics:** Allows users to toggle between the raw system-wide dataset and the Tier 1 & 2 customer channel dataset. It renders high-level KPI cards, interactive weekly charts, breach type ratios, and a dynamic Pareto chart. I also built a collapsable dashboard section showing our static Matplotlib charts.*
+> * * **Tab 2: Data Explorer:** Provides a clean search-and-filter interface for developers to inspect raw records, search for specific microservices, or filter by week without writing database queries.*
+> * * **Tab 3: Executive Insights:** Displays our automated strategic recommendations and highlights the critical data quality warning warning teams about the duplicated data between Week 2 and Week 3.*
+> * * **Tab 4: The Breach Chronicles:** Uses custom styling and markdown to tell a data-driven narrative, blending qualitative context with real-time database variables to walk the user through weekly events.*
+> 
+> *This interface gives both executives and engineers a single, shared operational dashboard."*
+
+---
+
+#### 🎤 Section 6: Summary & Closing for Q&A (12:30 – 15:00)
+> *"To summarize, this project is built for production reliability. I focused on several key engineering best practices:*
+> * * **Sub-millisecond Performance:** Streamlit reruns the Python script on every user interaction. To prevent database lockups and speed up load times, I opened DuckDB in read-only mode and cached database queries using `@st.cache_data`. Dashboard interactions compile in under 10 milliseconds.*
+> * * **Full Automation:** I built `run_all.bat` and `run_all.sh` scripts, allowing developers to execute the entire ETL, analytics generation, and email reporting pipeline in a single command.*
+> * * **Centralized Configuration:** The casing maps, SLA goals, and database tables are defined centrally in `config.py`, making the application highly maintainable and ready to scale as new microservices are introduced.*
+> 
+> *Thank you very much. I will now open the floor to any questions you may have about my data modeling decisions, validation checks, or SRE recommendations."*
+
+---
+
+## 🎓 Technical Interview Preparation Q&A
+
+This section details key architectural and code-specific questions an interviewer or system architect might ask you during a technical review of this codebase.
+
+### 📂 config.py (Configuration System)
+
+**Q: Why did you choose a `.py` file for configuration instead of `.json` or `.yaml`?**
+> **Answer:** 
+> "A `.py` file configuration allows us to define standardisation functions (like `standardize_breach_type` and `standardize_microservice`) directly alongside the static configurations. This keeps logic and configuration centralized, leverages type hints, avoids parsing overhead at runtime, and allows us to standardise strings across all files with a single import."
+
+**Q: How does the microservice casing standardisation work?**
+> **Answer:** 
+> "In `config.py`, we define a dictionary mapping lowercase service names to standard casing. The `standardize_microservice` helper takes the raw string, strips whitespace, converts it to lowercase, and performs a `.get()` lookup in the mapping dictionary. If the service is registered, it returns standard casing; otherwise, it returns the cleaned original name, dynamically supporting new services without crashing."
+
+---
+
+### 📥 db_loader.py (Ingestion & ETL)
+
+**Q: Why did you use `pandas` to read the Excel sheets instead of having DuckDB read them directly?**
+> **Answer:** 
+> "While DuckDB is extremely fast for SQL queries, its native Excel parser extension is less flexible for cleaning messy spreadsheets. `pandas` allows us to easily handle data quality issues—such as stripping leading/trailing whitespace (`.str.strip()`), coercing invalid data types (`pd.to_numeric`), and profiling/imputing missing values (`.fillna()`)—before piping clean dataframes directly into DuckDB."
+
+**Q: Walk me through the cross-week duplication check. How does it work?**
+> **Answer:** 
+> "To detect copy-paste errors across sheets, I implemented a pairwise comparison check: we extract all unique weeks, loop through each pair, sort records by service name, reset their indices, and use pandas `.equals()` to check if the dataframes are identical. This check successfully flagged that Week 2 and Week 3 in the Tier 1 & 2 customer channel sheets were identical, which points to a data entry error in the source file."
+
+**Q: In `validate_data_types`, how do you handle non-numeric values in the `Breach Count` column?**
+> **Answer:** 
+> "I use `pd.to_numeric` with the parameter `errors='coerce'`, which safely converts any non-numeric strings (like text typos or spaces) to `NaN`. If any new `NaN` values are detected, we log a warning notifying SRE and impute them to `0` using `.fillna(0)` before casting to integer to satisfy database constraints."
+
+---
+
+### 📊 analyzer.py (SQL Analytics & Visualization)
+
+**Q: Why did you split the Matplotlib visualizations into `generate_system_dashboard` and `generate_tier_dashboard`?**
+> **Answer:** 
+> "Separation of concerns. Each dashboard targets a different audience: the System Dashboard gives SREs a holistic view of all 253 services and total system Pareto metrics, while the Tier 1 & 2 Dashboard gives customer experience executives a view of the 16 critical channels. Generating them separately outputs distinct static files loaded dynamically by both Streamlit and reporting tools."
+
+**Q: How does the WoW (Week-over-Week) trend calculation work dynamically?**
+> **Answer:** 
+> "Instead of hardcoding week numbers, the script queries the database for all unique weeks, extracts their digits using regex/filtering, and sorts them chronologically. It picks the last two elements of the sorted list. This ensures that if a new `Week 5` sheet is added to the Excel file, the comparison window shifts dynamically without needing code modifications."
+
+---
+
+### 📧 send_report.py (Executive Reporting)
+
+**Q: How did you make the email report recommendations dynamic?**
+> **Answer:** 
+> "Rather than hardcoding microservice names in the HTML body, `send_report.py` queries DuckDB to find the top system-wide breach offender, the runner up, and the top customer-facing offender. It passes these values to `generate_recommendations()`, which returns formatted HTML bullets detailing their exact breach counts and SRE action plans."
+
+**Q: Explain how you embed the Matplotlib dashboard image inline in the HTML email.**
+> **Answer:** 
+> "To make the report seamless for executives, I used the `MIMEMultipart('related')` email standard. The image is attached using `MIMEImage` with a unique `Content-ID` header. In the HTML string, we embed the image using `<img src="cid:breach_dashboard" />` so it renders directly inline in the body."
+
+---
+
+### 🖥️ app.py (Streamlit Dashboard Portal)
+
+**Q: Why did you implement query caching using `@st.cache_data`?**
+> **Answer:** 
+> "Streamlit is reactive and reruns the entire Python script from top to bottom on every user interaction. Querying DuckDB on every click degrades performance and introduces file-locking risks. Encapsulating database reads in a cached helper function ensures data is loaded once and cached in memory. Reruns now compile in sub-milliseconds, creating an instantaneous user experience."
+
+**Q: Why does the Streamlit app connect using `read_only=True`?**
+> **Answer:** 
+> "DuckDB is an embedded database. By default, it locks the database file for exclusive write access. Passing `read_only=True` ensures the Streamlit app never locks the database, allowing infinite concurrent dashboard sessions to read the data even if the ETL pipeline is executing in another process."
+

@@ -45,7 +45,8 @@ echo.
 
 echo =============================================
 echo PIPELINE COMPLETE!
-echo Launching the interactive local web dashboard portal...
+echo.
+echo To launch the interactive local web dashboard portal, run:
+echo   .venv\Scripts\streamlit.exe run app.py
 echo =============================================
-
-"%VENV_STREAMLIT%" run "%SCRIPT_DIR%app.py" --server.fileWatcherType none
+exit /b 0

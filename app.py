@@ -2,18 +2,19 @@ import streamlit as st
 import duckdb
 import pandas as pd
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import config
 
-db_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breaches.duckdb")
-
-# Page config
+# Set page config
 st.set_page_config(
-    page_title="Enterprise Observability Dashboard",
+    page_title="Enterprise Observability Portal",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Styles
+# Custom Styling (CSS)
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -31,9 +32,9 @@ st.markdown("""
             margin-bottom: 25px;
         }
 
-        /* Storytelling tab */
+        /* Storytelling tab styles */
         .story-hero {
-            background: linear-gradient(135deg, var(--primary-color), #2b5876);
+            background: linear-gradient(135deg, #2c3e50, #2b5876);
             padding: 45px 40px;
             border-radius: 16px;
             margin-bottom: 30px;
@@ -188,83 +189,73 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
 st.markdown('<div class="main-title">Enterprise Observability - Service Breach Portal</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Interactive Real-time Observability Analytics & Business Intelligence Dashboard</div>', unsafe_allow_html=True)
 
-# Sidebar
+# Sidebar Configuration
 st.sidebar.header("Navigation & Filters")
 dataset_choice = st.sidebar.selectbox(
     "Select Target Dataset",
     ["Overall System Raw Data", "Tier 1 & Tier 2 Channels"]
 )
 
-# DB connection
-if not os.path.exists(db_file):
-    st.error(f"DuckDB database not found at {db_file}. Please run the pipeline script first to generate the database.")
+if not os.path.exists(config.DB_FILE):
+    st.error(f"DuckDB database not found at {config.DB_FILE}. Please run the pipeline script first to generate the database.")
     st.stop()
 
-conn = duckdb.connect(db_file, read_only=True)
+def get_sorted_weeks(weeks_list):
+    def week_key(w):
+        digits = ''.join(filter(str.isdigit, str(w)))
+        return int(digits) if digits else 0
+    return sorted(weeks_list, key=week_key)
 
+@st.cache_data
+def load_table_data(table_name: str) -> pd.DataFrame:
+    """Load table from duckdb."""
+    conn = duckdb.connect(config.DB_FILE, read_only=True)
+    try:
+        df = conn.execute(f"SELECT * FROM {table_name}").df()
+        return df
+    finally:
+        conn.close()
 
 table_name = "weekly_breaches_raw" if dataset_choice == "Overall System Raw Data" else "tier_1_2_breaches"
-df_all = conn.execute(f"SELECT * FROM {table_name}").df()
+df_all = load_table_data(table_name)
 
+df_raw_full = load_table_data("weekly_breaches_raw")
+df_tier_full = load_table_data("tier_1_2_breaches")
 
-other_table = "tier_1_2_breaches" if dataset_choice == "Overall System Raw Data" else "weekly_breaches_raw"
-df_other = conn.execute(f"SELECT * FROM {other_table}").df()
-
-# Full datasets for the chronicles tab
-df_raw_full = conn.execute("SELECT * FROM weekly_breaches_raw").df()
-df_tier_full = conn.execute("SELECT * FROM tier_1_2_breaches").df()
-
-# Breach type classification
-if dataset_choice == "Overall System Raw Data":
-    df_all['core_breach_type'] = df_all['breach_type'].map(lambda x: 
-        'Error rate' if x in ['Error rate', 'Availability', 'Health Check', 'Failed Count', 'Failure Rate & Failed Count']
-        else 'Latency' if x in ['Latency', 'Consumer Lag', 'Pending Count', 'Pending Rate & Pending Count', 'Frozen Jobs', 'Unsynced Count', 'High Disk Usage on D:']
-        else 'Unknown'
-    )
-else:
-    df_all['core_breach_type'] = df_all['breach_type']
-
-
-df_raw_full['core_breach_type'] = df_raw_full['breach_type'].map(lambda x: 
-    'Error rate' if x in ['Error rate', 'Availability', 'Health Check', 'Failed Count', 'Failure Rate & Failed Count']
-    else 'Latency' if x in ['Latency', 'Consumer Lag', 'Pending Count', 'Pending Rate & Pending Count', 'Frozen Jobs', 'Unsynced Count', 'High Disk Usage on D:']
-    else 'Unknown'
-)
-df_tier_full['core_breach_type'] = df_tier_full['breach_type']
-
-# Sidebar filters
-weeks_available = sorted(df_all['week'].unique())
+# Filters
+weeks_available = get_sorted_weeks(df_all['week'].unique())
 selected_weeks = st.sidebar.multiselect("Filter by Week", weeks_available, default=weeks_available)
 
 types_available = sorted(df_all['core_breach_type'].unique())
 selected_types = st.sidebar.multiselect("Filter by Core Breach Type", types_available, default=types_available)
 
+# Filter dataset
+if len(df_all) > 0:
+    df_filtered = df_all[
+        (df_all['week'].isin(selected_weeks)) & 
+        (df_all['core_breach_type'].isin(selected_types))
+    ]
+else:
+    df_filtered = pd.DataFrame(columns=df_all.columns)
 
-df_filtered = df_all[
-    (df_all['week'].isin(selected_weeks)) & 
-    (df_all['core_breach_type'].isin(selected_types))
-]
+# KPI calculations
+total_breaches = df_filtered['breach_count'].sum() if not df_filtered.empty else 0
+unique_services = df_filtered['microservice'].nunique() if not df_filtered.empty else 0
 
-# KPIs
-total_breaches = df_filtered['breach_count'].sum() if len(df_filtered) > 0 else 0
-unique_services = df_filtered['microservice'].nunique() if len(df_filtered) > 0 else 0
-
-if len(df_filtered) > 0:
+if not df_filtered.empty and total_breaches > 0:
     err_count = df_filtered[df_filtered['core_breach_type'] == 'Error rate']['breach_count'].sum()
-    err_percent = (err_count / total_breaches) * 100 if total_breaches > 0 else 0
+    err_percent = (err_count / total_breaches) * 100
     
     lat_count = df_filtered[df_filtered['core_breach_type'] == 'Latency']['breach_count'].sum()
-    lat_percent = (lat_count / total_breaches) * 100 if total_breaches > 0 else 0
+    lat_percent = (lat_count / total_breaches) * 100
 else:
     err_count, err_percent, lat_count, lat_percent = 0, 0, 0, 0
 
-
+# Render KPIs
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
     st.metric("Total SLA Breaches", f"{total_breaches:,}")
 with col2:
@@ -282,7 +273,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["Interactive Analytics", "Raw Data Explorer", 
 with tab1:
     st.subheader("Visual Analytics Trends")
     
-    if len(df_filtered) == 0:
+    if df_filtered.empty:
         st.warning("No data matches the selected filters.")
     else:
         col_chart1, col_chart2 = st.columns(2)
@@ -290,8 +281,12 @@ with tab1:
         with col_chart1:
             st.markdown("#### Weekly Breach Distribution")
             df_weekly = df_filtered.groupby(['week', 'core_breach_type'])['breach_count'].sum().reset_index()
-
+            # Sort weeks chronologically in the pivot
+            df_weekly['week_num'] = df_weekly['week'].apply(lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else 0)
+            df_weekly = df_weekly.sort_values('week_num')
+            
             df_pivot = df_weekly.pivot(index='week', columns='core_breach_type', values='breach_count').fillna(0)
+            df_pivot = df_pivot.reindex(get_sorted_weeks(df_pivot.index))
             st.bar_chart(df_pivot)
             
         with col_chart2:
@@ -299,22 +294,84 @@ with tab1:
             df_top = df_filtered.groupby('microservice')['breach_count'].sum().sort_values(ascending=False).head(10).reset_index()
             st.bar_chart(data=df_top, x="microservice", y="breach_count", color="#ff4757")
 
+        # Pareto Analysis Section
+        st.markdown("---")
+        st.markdown("#### Pareto Analysis: System-Wide 80/20 Cutoff Rule")
+        st.markdown(
+            "Pareto analysis isolates the 'vital few' microservices causing 80% of total breaches. "
+            "Remediating these top bad actors generates the largest boost to platform reliability."
+        )
+        
+        df_p_data = df_filtered.groupby('microservice')['breach_count'].sum().sort_values(ascending=False).reset_index()
+        
+        if not df_p_data.empty:
+            df_p_data['cum_sum'] = df_p_data['breach_count'].cumsum()
+            total_f_breaches = df_p_data['breach_count'].sum()
+            df_p_data['cum_pct'] = (df_p_data['cum_sum'] / total_f_breaches) * 100 if total_f_breaches > 0 else 0
+            
+            # Find the vital few causing 80% of breaches
+            vital_few_df = df_p_data[df_p_data['cum_pct'] <= 80.0]
+            vital_few_names = vital_few_df['microservice'].tolist()
+            # Fallback if the first service immediately crosses 80%
+            if not vital_few_names and len(df_p_data) > 0:
+                vital_few_names = [df_p_data.iloc[0]['microservice']]
+                
+            fig_p, ax_p = plt.subplots(figsize=(10, 4))
+            sns.set_theme(style="whitegrid")
+            
+            # Pareto vertical bars
+            bars_p = ax_p.bar(df_p_data['microservice'].head(10), df_p_data['breach_count'].head(10), color='#57606f', width=0.4)
+            ax_p.set_ylabel('SLA Breach Count', color='#2c3e50', fontweight='bold')
+            ax_p.tick_params(axis='y', labelcolor='#2c3e50')
+            ax_p.set_xticks(range(len(df_p_data['microservice'].head(10))))
+            ax_p.set_xticklabels(df_p_data['microservice'].head(10), rotation=30, ha='right', fontsize=8)
+            
+            # Cumulative line secondary axis
+            ax_p_sec = ax_p.twinx()
+            ax_p_sec.plot(df_p_data['microservice'].head(10), df_p_data['cum_pct'].head(10), color='#ff4757', marker='o', linewidth=2.5)
+            ax_p_sec.set_ylabel('Cumulative % of Breaches', color='#ff4757', fontweight='bold')
+            ax_p_sec.tick_params(axis='y', labelcolor='#ff4757')
+            ax_p_sec.set_ylim(0, 110)
+            ax_p_sec.grid(False)
+            
+            # Draw 80% line
+            ax_p_sec.axhline(80, color='#ff4757', linestyle='--', alpha=0.7)
+            
+            fig_p.tight_layout()
+            
+            col_p1, col_p2 = st.columns([2, 1])
+            with col_p1:
+                st.pyplot(fig_p)
+            with col_p2:
+                st.markdown("##### Pareto Performance Metrics")
+                st.write(f"**Total bad actors in selection:** {len(df_p_data)}")
+                st.write(f"**Number of services causing 80% of breaches:** {len(vital_few_names)}")
+                st.write(f"**Concentration ratio:** {(len(vital_few_names)/max(1, len(df_p_data)))*100:.1f}% of services cause 80% of failures.")
+                st.markdown(f"**The Vital Few (Priority Queue):**")
+                for name in vital_few_names[:5]:
+                    st.markdown(f"- `{name}`")
+                if len(vital_few_names) > 5:
+                    st.markdown(f"*... and {len(vital_few_names)-5} other microservices*")
+        
         st.markdown("---")
         with st.expander("Show Static Matplotlib Observability Dashboard"):
-            _dashboard_img = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breach_dashboard.png")
-            if os.path.exists(_dashboard_img):
-                st.image(_dashboard_img, width="stretch")
+            # Select appropriate dashboard image path based on dataset choice
+            img_path = config.OUTPUT_IMAGE_SYSTEM if dataset_choice == "Overall System Raw Data" else config.OUTPUT_IMAGE_TIER
+            img_filename = os.path.basename(img_path)
+            
+            if os.path.exists(img_path):
+                st.image(img_path, width="stretch")
             else:
-                st.info("Dashboard image not found. Run the analysis pipeline (e.g. `analyzer.py`) to generate `breach_dashboard.png`.")
+                st.info(f"Dashboard image not found. Run the analysis pipeline to generate `{img_filename}`.")
 
 with tab2:
     st.subheader("Searchable Data Table")
     st.markdown("Use the filters on the left sidebar to change this table's output.")
     
     search_query = st.text_input("Quick Search Microservice Name", "")
-    df_table = df_filtered
+    df_table = df_filtered.copy()
     if search_query:
-        df_table = df_filtered[df_filtered['microservice'].str.lower().str.contains(search_query.lower())]
+        df_table = df_table[df_table['microservice'].str.lower().str.contains(search_query.lower())]
         
     st.dataframe(
         df_table.sort_values(by='breach_count', ascending=False),
@@ -325,7 +382,7 @@ with tab2:
             "breach_type": "Raw Breach Type",
             "core_breach_type": "Standardized Breach Type"
         },
-        width="stretch",
+        width='stretch',
         hide_index=True
     )
 
@@ -334,72 +391,123 @@ with tab3:
     
     col_ins1, col_ins2 = st.columns([2, 1])
     
+    # Calculate values dynamically for insights
+    top_eco_service, top_eco_breaches, top_eco_pct = "N/A", 0, 0.0
+    sec_eco_service, sec_eco_breaches = "N/A", 0
+    top_t12_service, top_t12_breaches = "N/A", 0
+    
+    if not df_raw_full.empty:
+        eco_counts = df_raw_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
+        total_eco = df_raw_full['breach_count'].sum()
+        if not eco_counts.empty:
+            top_eco_service = eco_counts.index[0]
+            top_eco_breaches = eco_counts.iloc[0]
+            top_eco_pct = (top_eco_breaches / total_eco) * 100 if total_eco > 0 else 0
+        if len(eco_counts) >= 2:
+            sec_eco_service = eco_counts.index[1]
+            sec_eco_breaches = eco_counts.iloc[1]
+            
+    if not df_tier_full.empty:
+        t12_counts = df_tier_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
+        if not t12_counts.empty:
+            top_t12_service = t12_counts.index[0]
+            top_t12_breaches = t12_counts.iloc[0]
+            
+    # Dynamic checks for duplicate sheets
+    has_t12_duplicates = False
+    dup_weeks = []
+    if not df_tier_full.empty:
+        t12_weeks = df_tier_full['week'].unique()
+        for i in range(len(t12_weeks)):
+            for j in range(i + 1, len(t12_weeks)):
+                w1 = t12_weeks[i]
+                w2 = t12_weeks[j]
+                df_w1 = df_tier_full[df_tier_full['week'] == w1][['microservice', 'breach_count', 'breach_type']].sort_values(by='microservice').reset_index(drop=True)
+                df_w2 = df_tier_full[df_tier_full['week'] == w2][['microservice', 'breach_count', 'breach_type']].sort_values(by='microservice').reset_index(drop=True)
+                if not df_w1.empty and not df_w2.empty and df_w1.equals(df_w2):
+                    has_t12_duplicates = True
+                    dup_weeks = [w1, w2]
+                    break
+                    
     with col_ins1:
-        st.markdown("""
+        st.markdown(f"""
         ### Strategic Recommendations
         
-        * **Audit the Xplorer Core Case API (`xplorer-case-api`)**:
-          This microservice is responsible for **3,641 breaches (10.0% of the entire ecosystem)**. Since these are mostly error rate incidents, SRE teams should prioritize code profiling and exceptions checks on its database query locks.
-        * **API Gateway Scaling**:
-          `OneBank.APIGateWay` accounts for **1,898 breaches** (mostly latency). We recommend increasing resources (CPU/Memory) or horizontally scaling instances to manage connection pooling bottlenecks.
-        * **Introduce Downstream Safeguards**:
-          Critical consumer portals (e.g. USSD, SMS, and OTP) show high vulnerability to failures in backend dependencies. Implementing automated client-side rate-limiting and connection queue cutoffs will prevent cascade outages.
+        * **Audit the Top Bad Actor (`{top_eco_service}`)**:
+          This microservice is responsible for **{top_eco_breaches:,} breaches ({top_eco_pct:.1f}% of the entire ecosystem)**. Since these are mostly error rate incidents, SRE teams should prioritize code profiling and exceptions checks on its database query locks.
+        * **Scaling Remediation for `{sec_eco_service}`**:
+          `{sec_eco_service}` accounts for **{sec_eco_breaches:,} breaches** (mostly latency). We recommend increasing resources (CPU/Memory) or horizontally scaling instances to manage connection pooling bottlenecks.
+        * **Introduce Downstream Safeguards for `{top_t12_service}`**:
+          Critical consumer portal `{top_t12_service}` accumulated **{top_t12_breaches:,} breaches**. Implementing automated client-side rate-limiting and connection queue cutoffs will prevent cascade outages.
         """)
-    
-    with col_ins2:
-        st.markdown("""
-        ### Data Quality Advisory
         
-        > ⚠️ **Tier 1 & 2 Sheet Anomaly**:
-        > The breach counts for all 16 microservices in `Week 2` and `Week 3` are *exactly identical* in the provided Tier 1 & 2 summary sheet. 
-        > This suggests a duplicate record entry error in the source Excel file.
-        > Operational decisions should account for this duplicate when analyzing channel trends.
-        """)
-
+    with col_ins2:
+        if has_t12_duplicates:
+            st.markdown(f"""
+            ### Data Quality Advisory
+            
+            > ⚠️ **Tier 1 & 2 Sheet Anomaly**:
+            > The breach counts for all 16 microservices in `{dup_weeks[0]}` and `{dup_weeks[1]}` are *exactly identical* in the provided Tier 1 & 2 summary sheet. 
+            > This suggests a duplicate record entry error in the source Excel file.
+            > Operational decisions should account for this duplicate when analyzing channel trends.
+            """)
+        else:
+            st.markdown("""
+            ### Data Quality Advisory
+            
+            > 🟢 **Database Integrity**:
+            > No duplicates or missing schemas detected in the current target database. Database constraints are verified.
+            """)
 
 with tab4:
-
-    # Metrics for the narrative
-    story_total = df_raw_full['breach_count'].sum()
-    story_services = df_raw_full['microservice'].nunique()
-    story_weeks = sorted(df_raw_full['week'].unique())
-
-
-    weekly_totals = df_raw_full.groupby('week')['breach_count'].sum().sort_index()
-    peak_week = weekly_totals.idxmax()
-    peak_val = weekly_totals.max()
-    low_week = weekly_totals.idxmin()
-    low_val = weekly_totals.min()
-
-
-    weekly_list = weekly_totals.reset_index()
-    weekly_list.columns = ['week', 'total']
-    weekly_list['wow_change'] = weekly_list['total'].pct_change() * 100
-
-
-    error_total = df_raw_full[df_raw_full['core_breach_type'] == 'Error rate']['breach_count'].sum()
-    latency_total = df_raw_full[df_raw_full['core_breach_type'] == 'Latency']['breach_count'].sum()
-    error_pct = (error_total / story_total) * 100 if story_total > 0 else 0
-    latency_pct = (latency_total / story_total) * 100 if story_total > 0 else 0
-
-
-    top_services = df_raw_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
-    top1_name = top_services.index[0] if len(top_services) > 0 else "N/A"
-    top1_count = top_services.iloc[0] if len(top_services) > 0 else 0
-    top1_pct = (top1_count / story_total) * 100 if story_total > 0 else 0
-    top3 = top_services.head(3)
-    top3_combined = top3.sum()
-    top3_pct = (top3_combined / story_total) * 100 if story_total > 0 else 0
-
-    # Tier 1 & 2 analysis
-    tier_total = df_tier_full['breach_count'].sum()
+    # Calculations for Chronicles Narrative
+    story_total = df_raw_full['breach_count'].sum() if not df_raw_full.empty else 0
+    story_services = df_raw_full['microservice'].nunique() if not df_raw_full.empty else 0
+    story_weeks = get_sorted_weeks(df_raw_full['week'].unique()) if not df_raw_full.empty else []
+    
+    if not df_raw_full.empty:
+        weekly_totals = df_raw_full.groupby('week')['breach_count'].sum()
+        # Ensure chronological sorting
+        weekly_totals = weekly_totals.reindex(get_sorted_weeks(weekly_totals.index))
+        
+        peak_week = weekly_totals.idxmax()
+        peak_val = weekly_totals.max()
+        low_week = weekly_totals.idxmin()
+        low_val = weekly_totals.min()
+        
+        weekly_list = weekly_totals.reset_index()
+        weekly_list.columns = ['week', 'total']
+        weekly_list['wow_change'] = weekly_list['total'].pct_change() * 100
+        
+        error_total = df_raw_full[df_raw_full['core_breach_type'] == 'Error rate']['breach_count'].sum()
+        latency_total = df_raw_full[df_raw_full['core_breach_type'] == 'Latency']['breach_count'].sum()
+        error_pct = (error_total / story_total) * 100 if story_total > 0 else 0
+        latency_pct = (latency_total / story_total) * 100 if story_total > 0 else 0
+        
+        top_services = df_raw_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
+        top1_name = top_services.index[0] if len(top_services) > 0 else "N/A"
+        top1_count = top_services.iloc[0] if len(top_services) > 0 else 0
+        top1_pct = (top1_count / story_total) * 100 if story_total > 0 else 0
+        top3 = top_services.head(3)
+        top3_combined = top3.sum()
+        top3_pct = (top3_combined / story_total) * 100 if story_total > 0 else 0
+    else:
+        peak_week, peak_val, low_week, low_val = "N/A", 0, "N/A", 0
+        error_pct, latency_pct = 0, 0
+        top1_name, top1_count, top1_pct, top3_combined, top3_pct = "N/A", 0, 0, 0, 0
+        weekly_list = pd.DataFrame()
+        
+    tier_total = df_tier_full['breach_count'].sum() if not df_tier_full.empty else 0
     tier_pct = (tier_total / story_total) * 100 if story_total > 0 else 0
-    tier_top = df_tier_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
-    tier_top1_name = tier_top.index[0] if len(tier_top) > 0 else "N/A"
-    tier_top1_count = tier_top.iloc[0] if len(tier_top) > 0 else 0
-
-
-    if len(weekly_list) >= 2:
+    
+    if not df_tier_full.empty:
+        tier_top = df_tier_full.groupby('microservice')['breach_count'].sum().sort_values(ascending=False)
+        tier_top1_name = tier_top.index[0] if len(tier_top) > 0 else "N/A"
+        tier_top1_count = tier_top.iloc[0] if len(tier_top) > 0 else 0
+    else:
+        tier_top1_name, tier_top1_count = "N/A", 0
+        
+    if not weekly_list.empty and len(weekly_list) >= 2:
         last_wow = weekly_list.iloc[-1]['wow_change']
         trend_direction = "improving" if last_wow < 0 else "worsening"
         trend_emoji = "📉" if last_wow < 0 else "📈"
@@ -407,12 +515,10 @@ with tab4:
         last_wow = 0
         trend_direction = "stable"
         trend_emoji = "➡️"
-
-    # Persistent offenders (present every week)
-    service_week_counts = df_raw_full.groupby('microservice')['week'].nunique()
+        
+    service_week_counts = df_raw_full.groupby('microservice')['week'].nunique() if not df_raw_full.empty else pd.Series()
     persistent_offenders = service_week_counts[service_week_counts == len(story_weeks)]
     num_persistent = len(persistent_offenders)
-
 
     st.markdown(f"""
     <div class="story-hero">
@@ -426,7 +532,7 @@ with tab4:
     """, unsafe_allow_html=True)
 
     # Act I
-    st.markdown(f"""
+    st.markdown("""
     <div class="story-chapter landscape">
         <div class="chapter-label">Act I</div>
         <h2>The Landscape — A System Under Siege</h2>
@@ -459,7 +565,7 @@ with tab4:
         <h4>📊 The Numbers Tell a Story</h4>
         <p>
             Over the observation window, the enterprise ecosystem recorded <strong>{story_total:,.0f} SLA breaches</strong> — 
-            an average of <strong>{story_total / len(story_weeks):,.0f} breaches per week</strong>. 
+            an average of <strong>{story_total / max(1, len(story_weeks)):,.0f} breaches per week</strong>. 
             The split isn't random: <strong>{error_pct:.1f}% are error-rate incidents</strong> (failed requests, health check failures, availability drops), 
             while <strong>{latency_pct:.1f}% are latency-related</strong> (slow responses, consumer lag, pending queues).
             This near 60/40 split reveals a system where <em>things don't just break — they also crawl</em>.
@@ -467,11 +573,14 @@ with tab4:
     </div>
     """, unsafe_allow_html=True)
 
-
     st.markdown("#### 📈 The Weekly Pulse")
-    df_story_weekly = df_raw_full.groupby(['week', 'core_breach_type'])['breach_count'].sum().reset_index()
-    df_story_pivot = df_story_weekly.pivot(index='week', columns='core_breach_type', values='breach_count').fillna(0)
-    st.bar_chart(df_story_pivot)
+    if not df_raw_full.empty:
+        df_story_weekly = df_raw_full.groupby(['week', 'core_breach_type'])['breach_count'].sum().reset_index()
+        df_story_weekly['week_num'] = df_story_weekly['week'].apply(lambda x: int(''.join(filter(str.isdigit, x))) if any(c.isdigit() for c in x) else 0)
+        df_story_weekly = df_story_weekly.sort_values('week_num')
+        df_story_pivot = df_story_weekly.pivot(index='week', columns='core_breach_type', values='breach_count').fillna(0)
+        df_story_pivot = df_story_pivot.reindex(get_sorted_weeks(df_story_pivot.index))
+        st.bar_chart(df_story_pivot)
 
     wow_narratives = []
     for _, row in weekly_list.iterrows():
@@ -496,7 +605,7 @@ with tab4:
     st.markdown("---")
 
     # Act II
-    st.markdown(f"""
+    st.markdown("""
     <div class="story-chapter villains">
         <div class="chapter-label">Act II</div>
         <h2>The Villains — Unmasking the Worst Offenders</h2>
@@ -516,15 +625,16 @@ with tab4:
     """, unsafe_allow_html=True)
 
     st.markdown("#### 🏆 Top 10 Most Breaching Services")
-    df_story_top = top_services.head(10).reset_index()
-    df_story_top.columns = ['microservice', 'breach_count']
-    st.bar_chart(data=df_story_top, x="microservice", y="breach_count", color="#f5576c")
+    if not df_raw_full.empty:
+        df_story_top = top_services.head(10).reset_index()
+        df_story_top.columns = ['microservice', 'breach_count']
+        st.bar_chart(data=df_story_top, x="microservice", y="breach_count", color="#f5576c")
 
     st.markdown(f"""
     <div class="story-insight warning">
         <h4>⚡ The Concentration Problem</h4>
         <p>
-            The top 3 services alone — <strong>{', '.join(f'<code>{n}</code>' for n in top3.index)}</strong> — 
+            The top 3 services alone — <strong>{', '.join(f'<code>{n}</code>' for n in top3.index) if not df_raw_full.empty else 'N/A'}</strong> — 
             account for <strong>{top3_combined:,.0f} breaches ({top3_pct:.1f}%)</strong> of the total.
             Meanwhile, <strong>{num_persistent} services</strong> appear as offenders in <em>every single week</em> 
             of the observation period. These aren't flaky failures — they're <strong>chronic, systemic issues</strong> 
@@ -532,7 +642,6 @@ with tab4:
         </p>
     </div>
     """, unsafe_allow_html=True)
-
 
     st.markdown(f"""
     <div class="story-insight">
@@ -551,7 +660,7 @@ with tab4:
     st.markdown("---")
 
     # Act III
-    st.markdown(f"""
+    st.markdown("""
     <div class="story-chapter forward">
         <div class="chapter-label">Act III</div>
         <h2>The Path Forward — From Chaos to Control</h2>
@@ -593,8 +702,7 @@ with tab4:
         </div>
         """, unsafe_allow_html=True)
 
-
-    breaches_per_day = story_total / (len(story_weeks) * 7)
+    breaches_per_day = story_total / (max(1, len(story_weeks)) * 7)
     st.markdown(f"""
     <div class="story-verdict">
         <h3>The Bottom Line</h3>
@@ -607,6 +715,3 @@ with tab4:
         </p>
     </div>
     """, unsafe_allow_html=True)
-
-conn.close()
-

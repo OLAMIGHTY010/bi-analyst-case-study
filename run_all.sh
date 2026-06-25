@@ -3,8 +3,20 @@
 
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python3"
-VENV_STREAMLIT="$SCRIPT_DIR/.venv/bin/streamlit"
+
+if [ -f "$SCRIPT_DIR/.venv/bin/python" ]; then
+    VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+elif [ -f "$SCRIPT_DIR/.venv/bin/python3" ]; then
+    VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python3"
+else
+    VENV_PYTHON="python"
+fi
+
+if [ -f "$SCRIPT_DIR/.venv/bin/streamlit" ]; then
+    VENV_STREAMLIT="$SCRIPT_DIR/.venv/bin/streamlit"
+else
+    VENV_STREAMLIT="streamlit"
+fi
 
 echo "============================================="
 echo "Starting Enterprise Observability Pipeline"
@@ -39,8 +51,7 @@ echo "Pipeline completed successfully!"
 echo "Database location: $SCRIPT_DIR/breaches.duckdb"
 echo "Dashboard image:   $SCRIPT_DIR/breach_dashboard.png"
 echo "Simulated email:   $SCRIPT_DIR/simulated_email.html"
-echo -e "\nLaunching the interactive local web dashboard portal..."
+echo -e "\nTo launch the interactive local web dashboard portal, run:"
+echo "  source .venv/bin/activate && streamlit run app.py"
 echo "============================================="
-
-# Launch Streamlit automatically (file watcher disabled to prevent inotify limits)
-$VENV_STREAMLIT run "$SCRIPT_DIR/app.py" --server.fileWatcherType none
+exit 0
